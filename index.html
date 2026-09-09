@@ -223,7 +223,7 @@
       terminarJuego: function () {
         this.jugando = false;
         clearInterval(this.temporizador); // dejamos de descontar segundos
-        this.hudFinal.setAttribute('value', `¡Tiempo! Puntuación final: ${this.puntos}`);
+        this.hudFinal.setAttribute('value', `¡Tiempo! Puntuacion final: ${this.puntos}`);
         this.hudFinal.setAttribute('visible', true);
         this.botonReiniciar.setAttribute('visible', true);
       },
