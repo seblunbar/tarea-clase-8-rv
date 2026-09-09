@@ -23,29 +23,40 @@
     // dependencias entre ellos), así que las repetimos aquí a propósito.
     // ==================================================================
 
+    // Crear la variable del contexto fuera de la función para evitar el límite de AudioContext
+    let audioCtx = null;
+
     // Genera un "beep" con la Web Audio API: no necesitamos ningún .mp3
     function reproducirBeep(frecuencia, duracion = 0.2) {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const osc = ctx.createOscillator();      // el osc es lo que produce el tono
-      const gain = ctx.createGain();           // el gain controla el volumen en el tiempo
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      const osc = audioCtx.createOscillator();     // el osc es lo que produce el tono
+      const gain = audioCtx.createGain();          // el gain controla el volumen en el tiempo
       osc.frequency.value = frecuencia;        // tono más agudo = frecuencia más alta
       osc.connect(gain);
-      gain.connect(ctx.destination);           // "destination" = las bocinas/audífonos
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.connect(audioCtx.destination);          // "destination" = las bocinas/audífonos
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
       // El volumen baja exponencialmente hasta casi 0: así el beep se apaga solo
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duracion);
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duracion);
       osc.start();
-      osc.stop(ctx.currentTime + duracion);
+      osc.stop(audioCtx.currentTime + duracion);
     }
 
     // Hace vibrar el control del Quest que disparó el evento
     function vibrarControl(evento, duracion = 150) {
-      // Tomamos el cursor (si fue click) o el target directo (si fue botón del mando)
       const controlEl = (evento.detail && evento.detail.cursorEl) || evento.target; 
       if (!controlEl) return;
-      const trackedControls = controlEl.components['tracked-controls']; // solo existe en los controles reales
-      const gamepad = trackedControls && trackedControls.controller;   // el objeto Gamepad del navegador
-      if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+
+      // 1. Buscar el componente moderno de WebXR o el clásico
+      const trackedControls = controlEl.components['tracked-controls-webxr'] || controlEl.components['tracked-controls'];
+      if (!trackedControls) return;
+
+      // 2. Extraer el gamepad desde el XRInputSource
+      const inputSource = trackedControls.controller;
+      const gamepad = inputSource && inputSource.gamepad ? inputSource.gamepad : inputSource;
+
+      // 3. Ejecutar el pulso si el hardware lo soporta
+      if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators.length > 0) {
         gamepad.hapticActuators[0].pulse(0.85, duracion); // (fuerza 0 a 1, duración en ms)
       }
     }
