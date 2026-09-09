@@ -180,7 +180,7 @@
 
         // Escucha el botón del joystick para emitir sonido y vibrar
         this.el.sceneEl.addEventListener('thumbstickdown', (evento) => {
-          reproducirBeep(440, 0.5);
+          reproducirBeep(440, 1);
           vibrarControl(evento, 500);
         });
 
