@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Juego: Atrapa la Esfera — A-Frame</title>
+  <!-- Misma versión que los demás archivos de la carpeta: A-Frame 1.8.0 -->
+  <script src="https://aframe.io/releases/1.8.0/aframe.min.js"></script>
+
+  <script>
+    // ==================================================================
+    // FUNCIONES DE APOYO (idénticas a las de 03-escena-vr-interactiva.html)
+    // Cada archivo de esta carpeta es independiente (un solo HTML, sin
+    // dependencias entre ellos), así que las repetimos aquí a propósito.
+    // ==================================================================
+
+    // Genera un "beep" con la Web Audio API: no necesitamos ningún .mp3
+    function reproducirBeep(frecuencia, duracion = 0.2) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();      // el osc es lo que produce el tono
+      const gain = ctx.createGain();           // el gain controla el volumen en el tiempo
+      osc.frequency.value = frecuencia;        // tono más agudo = frecuencia más alta
+      osc.connect(gain);
+      gain.connect(ctx.destination);           // "destination" = las bocinas/audífonos
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      // El volumen baja exponencialmente hasta casi 0: así el beep se apaga solo
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duracion);
+      osc.start();
+      osc.stop(ctx.currentTime + duracion);
+    }
+
+    // Hace vibrar el control del Quest que disparó el evento
+    function vibrarControl(evento, duracion = 150) {
+      // Tomamos el cursor (si fue click) o el target directo (si fue botón del mando)
+      const controlEl = (evento.detail && evento.detail.cursorEl) || evento.target; 
+      if (!controlEl) return;
+      const trackedControls = controlEl.components['tracked-controls']; // solo existe en los controles reales
+      const gamepad = trackedControls && trackedControls.controller;   // el objeto Gamepad del navegador
+      if (gamepad && gamepad.hapticActuators && gamepad.hapticActuators[0]) {
+        gamepad.hapticActuators[0].pulse(0.85, duracion); // (fuerza 0 a 1, duración en ms)
+      }
+    }
+
+    // ==================================================================
+    // COMPONENTE: campo-estrellas (igual que en 04-sistema-solar.html)
+    // Crea estrellas de fondo por código para ambientar el juego en el espacio
+    // ==================================================================
+    AFRAME.registerComponent('campo-estrellas', {
+      schema: { cantidad: { type: 'number', default: 100 } },
+      init: function () {
+        for (let i = 0; i < this.data.cantidad; i++) {
+          const radio = 40;
+          const theta = Math.random() * Math.PI * 2;
+          const phi = Math.acos((Math.random() * 2) - 1); // reparte las estrellas parejo por toda la esfera
+          const x = radio * Math.sin(phi) * Math.cos(theta);
+          const y = radio * Math.sin(phi) * Math.sin(theta);
+          const z = radio * Math.cos(phi);
+
+          const estrella = document.createElement('a-sphere');
+          estrella.setAttribute('radius', 0.04 + Math.random() * 0.05);
+          estrella.setAttribute('position', `${x} ${y} ${z}`);
+          estrella.setAttribute('material', 'shader: flat; color: #FFFFFF');
+          this.el.appendChild(estrella);
+        }
+      }
+    });
+
+    // ==================================================================
+    // COMPONENTE: objetivo
+    // Es la esfera brillante que el jugador debe tocar con el láser/mouse.
+    // Cada vez que la tocan: suena, vibra, avisa al gestor del juego y
+    // "teletransporta" la esfera a otro punto aleatorio a su alrededor.
+    // ==================================================================
+    AFRAME.registerComponent('objetivo', {
+      init: function () {
+        this.reubicar(); // posición inicial al cargar la escena
+
+        this.el.addEventListener('click', (evento) => {
+          // Preguntamos al gestor del juego si todavía se puede jugar
+          // (si el tiempo ya se acabó, ignoramos el clic)
+          const gestor = document.querySelector('#gestor-juego').components['gestor-juego'];
+          if (!gestor.jugando) return;
+
+          reproducirBeep(660);      // tono de "acierto"
+          vibrarControl(evento);    // vibración en el control que tocó la esfera
+
+          // Aviso a toda la escena de que se anotó un punto. El gestor del
+          // juego está escuchando este evento (ver componente "gestor-juego").
+          this.el.sceneEl.emit('punto-anotado');
+
+          this.reubicar(); // la esfera "escapa" a otra posición al azar
+        });
+      },
+
+      // Mueve esta entidad a un punto aleatorio alrededor del jugador:
+      // ángulo aleatorio (0-360°) + distancia y altura aleatorias.
+      reubicar: function () {
+        const angulo = Math.random() * Math.PI * 2;
+        const distancia = 2 + Math.random() * 1.5; // entre 2 y 3.5 metros
+        const altura = 1 + Math.random() * 1;       // entre 1 y 2 metros de alto
+        const x = distancia * Math.cos(angulo);
+        const z = distancia * Math.sin(angulo);
+        this.el.setAttribute('position', `${x} ${altura} ${z}`);
+      }
+    });
+
+    // ==================================================================
+    // *** NUEVO *** COMPONENTE: obstaculo (la figura que RESTA)
+    // Es igualito a "objetivo", con solo 2 diferencias:
+    //   1) suena grave (180) en vez de agudo (660)
+    //   2) emite "punto-restado" en vez de "punto-anotado"
+    // ==================================================================
+    AFRAME.registerComponent('obstaculo', {
+      init: function () {
+        this.reubicar(); // posición inicial al azar, igual que la esfera
+
+        this.el.addEventListener('click', (evento) => {
+          const gestor = document.querySelector('#gestor-juego').components['gestor-juego'];
+          if (!gestor.jugando) return;
+
+          reproducirBeep(180);      // tono grave de "error"
+          vibrarControl(evento);
+
+          this.el.sceneEl.emit('punto-restado'); // <-- avisa que hay que RESTAR
+
+          this.reubicar(); // también cambia de lugar al tocarlo
+        });
+      },
+
+      // Mismo cálculo aleatorio que usa "objetivo" (copiado para que cada
+      // componente se entienda por separado).
+      reubicar: function () {
+        const angulo = Math.random() * Math.PI * 2;
+        const distancia = 2 + Math.random() * 1.5;
+        const altura = 1 + Math.random() * 1;
+        const x = distancia * Math.cos(angulo);
+        const z = distancia * Math.sin(angulo);
+        this.el.setAttribute('position', `${x} ${altura} ${z}`);
+      }
+    });
+
+    // ==================================================================
+    // COMPONENTE: gestor-juego
+    // Lleva la cuenta de los puntos y el tiempo. Vive en una entidad
+    // aparte (#gestor-juego) para no mezclar "estado del juego" con
+    // "objeto 3D visible", que son dos responsabilidades distintas.
+    // ==================================================================
+    AFRAME.registerComponent('gestor-juego', {
+      init: function () {
+        this.puntos = 0;
+        this.segundosRestantes = 60;
+        this.jugando = true;
+
+        // Guardamos referencias a los textos del HUD para no buscarlos cada vez
+        this.hudPuntos = document.querySelector('#hud-puntos');
+        this.hudTiempo = document.querySelector('#hud-tiempo');
+        this.hudFinal = document.querySelector('#hud-final');
+        this.botonReiniciar = document.querySelector('#boton-reiniciar');
+
+        // Cuando cualquier objetivo emite "punto-anotado", sumamos un punto aquí
+        this.el.sceneEl.addEventListener('punto-anotado', () => this.sumarPunto());
+        // *** NUEVO *** cuando un obstáculo emite "punto-restado", restamos un punto
+        this.el.sceneEl.addEventListener('punto-restado', () => this.restarPunto());
+        this.botonReiniciar.addEventListener('click', () => this.reiniciar());
+
+        // *** NUEVO *** BOTONES DEL MANDO (Quest, control DERECHO)
+        // Un botón "manda un evento" al apretarlo. Lo escuchamos igual que
+        // escuchamos "punto-anotado". Botón A = reiniciar, Botón B = revolver.
+        this.el.sceneEl.addEventListener('abuttondown', () => this.reiniciar());
+        this.el.sceneEl.addEventListener('bbuttondown', () => this.revolver());
+
+        // Escucha el botón del joystick para emitir sonido y vibrar
+        this.el.sceneEl.addEventListener('thumbstickdown', (evento) => {
+          reproducirBeep(440, 0.5);
+          vibrarControl(evento, 500);
+        });
+
+        // Para PROBAR en la computadora (sin mando): tecla R = reiniciar, E = revolver, Q = joystick
+        window.addEventListener('keydown', (evento) => {
+          if (evento.key === 'r' || evento.key === 'R') this.reiniciar();
+          if (evento.key === 'e' || evento.key === 'E') this.revolver();
+          if (evento.key === 'q' || evento.key === 'Q') reproducirBeep(440, 0.5);
+        });
+
+        this.iniciarCronometro();
+      },
+
+      iniciarCronometro: function () {
+        // setInterval ejecuta esta función cada 1000 ms (1 segundo) hasta que la paremos
+        this.temporizador = setInterval(() => {
+          this.segundosRestantes--;
+          this.hudTiempo.setAttribute('value', `Tiempo: ${this.segundosRestantes}`);
+          if (this.segundosRestantes <= 0) {
+            this.terminarJuego();
+          }
+        }, 1000);
+      },
+
+      sumarPunto: function () {
+        if (!this.jugando) return;
+        this.puntos += 2;
+        this.hudPuntos.setAttribute('value', `Puntos: ${this.puntos}`);
+      },
+
+      // *** NUEVO *** gemelo de sumarPunto, pero resta en vez de sumar
+      restarPunto: function () {
+        if (!this.jugando) return;
+        this.puntos /= 2;
+        // Si NO quieres que baje de 0, quita el // de la línea de abajo:
+        if (this.puntos < 0) this.puntos = 0;
+        this.hudPuntos.setAttribute('value', `Puntos: ${this.puntos}`);
+      },
+
+      terminarJuego: function () {
+        this.jugando = false;
+        clearInterval(this.temporizador); // dejamos de descontar segundos
+        this.hudFinal.setAttribute('value', `¡Tiempo! Puntuación final: ${this.puntos}`);
+        this.hudFinal.setAttribute('visible', true);
+        this.botonReiniciar.setAttribute('visible', true);
+      },
+
+      reiniciar: function () {
+        // *** NUEVO *** paramos el cronómetro anterior antes de arrancar otro,
+        // por si reinician a media partida (evita que corran dos a la vez).
+        clearInterval(this.temporizador);
+        this.puntos = 0;
+        this.segundosRestantes = 60;
+        this.jugando = true;
+        this.hudPuntos.setAttribute('value', 'Puntos: 0');
+        this.hudTiempo.setAttribute('value', 'Tiempo: 60');
+        this.hudFinal.setAttribute('visible', false);
+        this.botonReiniciar.setAttribute('visible', false);
+        // Movemos el objetivo a un punto nuevo para empezar limpio
+        document.querySelector('.objetivo').components.objetivo.reubicar();
+        this.iniciarCronometro();
+      },
+
+      // *** NUEVO *** manda TODAS las figuras (buenas y malas) a lugares nuevos.
+      // Reutiliza el "reubicar" que ya tiene cada figura; no suma ni resta puntos.
+      revolver: function () {
+        if (!this.jugando) return;
+        document.querySelectorAll('.objetivo').forEach((el) => el.components.objetivo.reubicar());
+        document.querySelectorAll('.obstaculo').forEach((el) => el.components.obstaculo.reubicar());
+      }
+    });
+  </script>
+</head>
+
+<body>
+  <!--
+    JUEGO: ATRAPA LA ESFERA
+    Objetivo: apunta con el láser del control (o el mouse en la compu) a la
+    esfera brillante y haz clic/gatillo antes de que se acabe el tiempo.
+    Cada acierto suma un punto, hace un sonido, vibra el control y la esfera
+    reaparece en otro lugar alrededor de ti. Al llegar a 0 el juego termina
+    y aparece un botón para reiniciar.
+
+    POR QUÉ CONTROLES (laser-controls) Y NO MANOS:
+    El seguimiento de manos del Quest necesita permisos extra y es menos
+    estable para "apuntar y dar clic" con precisión. Los controles Touch
+    ya traen un rayo láser preciso integrado en A-Frame (laser-controls),
+    así que el juego es más simple y confiable con ellos.
+
+    CÓMO PROBARLO:
+      • En computadora: clic derecho → "Open with Live Server". Mueve el
+        mouse para apuntar y haz clic sobre la esfera brillante.
+      • En los Quest 3: publica la carpeta Github/ en HTTPS (ver LEEME.md),
+        ábrela en el Meta Quest Browser, toca el ícono de gafas para
+        entrar en VR y usa el gatillo del control para "disparar".
+  -->
+  <a-scene campo-estrellas="cantidad: 150">
+
+    <a-sky color="#00010D"></a-sky>
+
+    <!-- Luz general: suficiente para ver bien la esfera objetivo, sin sombras duras -->
+    <a-entity light="type: ambient; color: #55557A; intensity: 0.9"></a-entity>
+    <a-entity light="type: point; color: #FFFFFF; intensity: 0.8; distance: 20"
+               position="0 2.5 0"></a-entity>
+
+    <!--
+      ENTIDAD "invisible" que solo existe para guardar el componente
+      gestor-juego (no tiene geometría, no se ve). Es un patrón común en
+      A-Frame para separar "lógica del juego" de "objetos 3D".
+    -->
+    <a-entity id="gestor-juego" gestor-juego></a-entity>
+
+    <!--
+      LA ESFERA OBJETIVO
+      "objetivo" activa el componente que definimos arriba (posición,
+      clic, reubicación). "class=clickable" es lo que hace que el cursor
+      y los controles la detecten con su raycaster.
+    -->
+    <a-sphere class="clickable objetivo" objetivo radius="0.25" material="shader: flat; color: #39FF88"
+              animation="property: scale; to: 1.15 1.15 1.15; dir: alternate; loop: true; dur: 300"></a-sphere>
+
+    <!--
+      *** ÚNICO CAMBIO: FIGURAS EXTRA ***
+      Todas usan el MISMO componente "objetivo" y la clase "clickable objetivo",
+      así que TODAS suman un punto al tocarlas, igual que la esfera. No hizo
+      falta tocar el JavaScript de arriba: solo agregamos estas líneas.
+      Para tener más o menos figuras, copia o borra una de estas líneas.
+    -->
+    <a-box class="clickable objetivo" objetivo depth="0.4" height="0.4" width="0.4"
+           material="shader: flat; color: #FFB703"
+           animation="property: scale; to: 1.15 1.15 1.15; dir: alternate; loop: true; dur: 500"></a-box>
+
+    <a-cone class="clickable objetivo" objetivo radius-bottom="0.3" radius-top="0" height="0.6"
+            material="shader: flat; color: #FB5607"
+            animation="property: scale; to: 1.15 1.15 1.15; dir: alternate; loop: true; dur: 500"></a-cone>
+
+    <a-cylinder class="clickable objetivo" objetivo radius="0.25" height="0.5"
+                material="shader: flat; color: #8338EC"
+                animation="property: scale; to: 1.15 1.15 1.15; dir: alternate; loop: true; dur: 500"></a-cylinder>
+
+    <a-torus class="clickable objetivo" objetivo radius="0.28" radius-tubular="0.06"
+             material="shader: flat; color: #FF006E"
+             animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-torus>
+
+    <!--
+      TRIÁNGULO (plano). Por ser plano, se le pone "side: double" en el
+      material para que también se vea desde atrás. Los vertex-a/b/c son
+      sus 3 esquinas. Le puse animación de giro (no de "latido") para que
+      no quede de canto y se vuelva invisible.
+    -->
+    <a-triangle class="clickable objetivo" objetivo
+                vertex-a="0 0.4 0" vertex-b="-0.4 -0.3 0" vertex-c="0.4 -0.3 0"
+                material="shader: flat; color: #06D6A0; side: double"
+                animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-triangle>
+
+    <!--
+      *** NUEVO *** FIGURAS QUE RESTAN
+      Usan la clase "clickable obstaculo" y el componente "obstaculo", así
+      que al tocarlas RESTAN un punto. Son cubos rojos que giran para que se
+      distingan de las figuras buenas. Copia o borra líneas para tener más o menos.
+    -->
+    <a-box class="clickable obstaculo" obstaculo depth="0.4" height="0.4" width="0.4"
+           material="shader: flat; color: #FF4136"
+           animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-box>
+
+    <a-box class="clickable obstaculo" obstaculo depth="0.4" height="0.4" width="0.4"
+           material="shader: flat; color: #FF4136"
+           animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-box>
+
+    <a-tetrahedron class="clickable obstaculo" obstaculo radius="0.35"
+                   material="shader: flat; color: #FF4136"
+                   animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-tetrahedron>
+
+    <!--
+      Botón de reiniciar: es un objeto normal del MUNDO (no de la cámara),
+      igual que la esfera objetivo. Queda justo enfrente de donde arranca
+      el jugador, así que solo hay que mirar al frente y hacer clic.
+      OJO: si lo hubiéramos puesto como hijo de la cámara pero descentrado,
+      el cursor del mouse (que siempre apunta al centro de la pantalla)
+      jamás lo alcanzaría, por eso va aquí y no dentro del rig.
+    -->
+    <a-entity id="boton-reiniciar" class="clickable"
+              geometry="primitive: plane; width: 0.9; height: 0.35"
+              material="color: #4CC3D9" position="0 1.6 -2.2" visible="false">
+      <a-text value="Reiniciar" align="center" position="0 0 0.01" color="#000000" width="3"></a-text>
+    </a-entity>
+
+    <!-- ============================================================
+         JUGADOR (rig) + HUD (marcador y tiempo pegados a la cámara,
+         para que siempre estén a la vista sin importar hacia dónde mires).
+         El HUD es solo texto informativo, no necesita recibir clics.
+         ============================================================ -->
+    <a-entity id="rig" position="0 0 0">
+      <a-entity camera look-controls wasd-controls position="0 1.6 0">
+        <!-- Cursor para apuntar con el mouse en la compu (siempre mira al centro de la pantalla) -->
+        <a-cursor raycaster="objects: .clickable" color="#FFFFFF"></a-cursor>
+
+        <!-- HUD: hijos de la cámara, por eso "viajan" contigo al mirar alrededor -->
+        <a-text id="hud-puntos" value="Puntos: 0" position="-0.9 0.6 -1.4" width="2.2" color="#FFFFFF"></a-text>
+        <a-text id="hud-tiempo" value="Tiempo: 60" position="0.4 0.6 -1.4" width="2.2" color="#FFFFFF"></a-text>
+
+        <!-- Mensaje de fin de juego: oculto hasta que se acaba el tiempo -->
+        <a-text id="hud-final" value="" position="-0.9 0.15 -1.4" width="2.6" color="#FFD166" visible="false"></a-text>
+      </a-entity>
+
+      <!-- Controles del Quest 3: rayo láser para apuntar y disparar con el gatillo -->
+      <a-entity laser-controls="hand: left" raycaster="objects: .clickable"></a-entity>
+      <a-entity laser-controls="hand: right" raycaster="objects: .clickable"></a-entity>
+    </a-entity>
+
+  </a-scene>
+</body>
+</html>
